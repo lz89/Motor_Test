@@ -23,6 +23,13 @@ string g_portName;
 DWORD g_baudrate = 0;
 const string g_programName = "Maxon Test Program";
 
+// Testing parameters
+DWORD g_acceleration = 10000;   // unit: rpm/s
+DWORD g_deceleration = 10000;
+DWORD g_velocity = 10000;       // rpm
+DWORD g_position = 0;
+
+
 void SetDefaultParameters();
 int OpenDevice(DWORD* p_pErrorCode);
 int CloseDevice(DWORD* p_pErrorCode);
@@ -213,6 +220,7 @@ int DemoProfileVelocityMode(HANDLE p_DeviceHandle, WORD p_usNodeId, DWORD & p_rl
 
     cout << msg.str() << endl;
 
+
     if(VCS_ActivateProfileVelocityMode(p_DeviceHandle, p_usNodeId, &p_rlErrorCode) == 0)
     {
         LogError("VCS_ActivateProfileVelocityMode", lResult, p_rlErrorCode);
@@ -220,11 +228,28 @@ int DemoProfileVelocityMode(HANDLE p_DeviceHandle, WORD p_usNodeId, DWORD & p_rl
     }
     else
     {
+        // Check velocity profile parameters
+        DWORD  l_acceleration = 10000, l_deceleration = 10000;
+
+        if(VCS_SetVelocityProfile(p_DeviceHandle, p_usNodeId, l_acceleration, l_deceleration, &p_rlErrorCode) == 0)
+        {
+            LogError("VCS_ActivateProfileVelocityMode", lResult, p_rlErrorCode);
+            lResult = MMC_FAILED;
+        }
+
+        if(VCS_GetVelocityProfile(p_DeviceHandle, p_usNodeId, &l_acceleration, &l_deceleration, &p_rlErrorCode) == 0)
+        {
+            lResult = MMC_FAILED;
+            LogError("VCS_GetVelocityProfile", lResult, p_rlErrorCode);
+        } else{
+            cout << "current acceleration: " << l_acceleration << ", deceleration: " << l_deceleration << endl;
+        }
+
         list<long> velocityList;
 
-        velocityList.push_back(5000);
+        velocityList.push_back(-5000);
         velocityList.push_back(10000);
-        velocityList.push_back(20000);
+//        velocityList.push_back(20000);
 
         for(list<long>::iterator it = velocityList.begin(); it !=velocityList.end(); it++)
         {
@@ -241,7 +266,7 @@ int DemoProfileVelocityMode(HANDLE p_DeviceHandle, WORD p_usNodeId, DWORD & p_rl
                 break;
             }
 
-            Sleep(1000);
+            Sleep(5000);
         }
 
         if(lResult == MMC_SUCCESS)
