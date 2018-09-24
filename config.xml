@@ -1,0 +1,25 @@
+<MOTOR_TEST_PARAMETERS>
+	<!-- Velocity or Position -->
+	<MODE>Position</MODE>
+	<!-- Number of iteration -->
+	<Iteration>1</Iteration>
+	<Velocity_Mode_Parameters>
+		<!-- Unit: RPM -->
+		<Target_Velocity>10000</Target_Velocity>
+		<!-- Unit: RPM/s -->
+		<Acceleration>10000</Acceleration>
+		<!-- Unit: RPM/s -->
+		<Deceleration>10000</Deceleration>
+		<!-- Duration of each loop (excl. acceleration and deceleration). Unit: second -->
+		<Duration>1</Duration>
+	</Velocity_Mode_Parameters>
+	<Position_Mode_Parameters>
+		<Target_Position>100000</Target_Position>
+		<!-- Unit: RPM -->
+		<Max_Velocity>10000</Max_Velocity>
+		<!-- Unit: RPM/s -->
+		<Acceleration>10000</Acceleration>
+		<!-- Unit: RPM/s -->
+		<Deceleration>10000</Deceleration>
+	</Position_Mode_Parameters>
+</MOTOR_TEST_PARAMETERS>

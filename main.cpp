@@ -3,6 +3,7 @@
 #include <iostream>
 #include <sstream>
 #include <list>
+#include "tinyxml2.h"
 
 #ifndef MMC_SUCCESS
 #define MMC_SUCCESS 0
@@ -24,26 +25,105 @@ DWORD g_baudrate = 0;
 const string g_programName = "Maxon Test Program";
 
 // Testing parameters
-DWORD g_acceleration = 10000;   // unit: rpm/s
-DWORD g_deceleration = 10000;
-DWORD g_velocity = 10000;       // rpm
-DWORD g_position = 0;
+DWORD g_V_MODE_velocity = 10000;       // rpm
+DWORD g_V_MODE_acceleration = 10000;   // unit: rpm/s
+DWORD g_V_MODE_deceleration = 10000;
+int g_V_MODE_duration = 0;
+
+DWORD g_P_MODE_position = 0;
+DWORD g_P_MODE_max_velocity = 0;
+DWORD g_P_MODE_acceleration = 0;
+DWORD g_P_MODE_deceleration = 0;
 
 
 void SetDefaultParameters();
 int OpenDevice(DWORD* p_pErrorCode);
 int CloseDevice(DWORD* p_pErrorCode);
 int PrepareDemo(DWORD * p_pErrorCode);
+int SetupProfileVelocityMode(HANDLE p_DeviceHandle, WORD p_usNodeId, DWORD & p_rlErrorCode);
+int SetupProfilePositionMode(HANDLE p_DeviceHandle, WORD p_usNodeId, DWORD & p_rlErrorCode);
 int DemoProfileVelocityMode(HANDLE p_DeviceHandle, WORD p_usNodeId, DWORD & p_rlErrorCode);
 int DemoProfilePositionMode(HANDLE p_DeviceHandle, WORD p_usNodeId, DWORD & p_rlErrorCode);
-int Demo(DWORD * p_pErrorCode);
+int zeroPosition(HANDLE p_DeviceHandle, WORD p_usNodeId, DWORD & p_rlErrorCode);
+void PrintMotorPositon(HANDLE p_DeviceHandle, WORD p_usNodeId, DWORD & p_rlErrorCode);
 int PrintAvailableInterfaces();
 int PrintAvailablePorts(char* p_pInterfaceNameSel);
 int PrintDeviceVersion();
 void  PrintSettings();
 void LogError(string functionName, int p_lResult, DWORD p_ulErrorCode);
 
+enum Mode { POS_MODE, VEL_MODE};
+
 int main(int argc, char** argv) {
+    // Load parameters and setting from XML
+    tinyxml2::XMLDocument xml_doc;
+    xml_doc.LoadFile("config.xml");
+    tinyxml2::XMLNode * pRoot = xml_doc.FirstChild();
+    tinyxml2::XMLElement * pElement = pRoot->FirstChildElement("MODE");
+
+    Mode mode;
+
+    if (pElement == nullptr) return tinyxml2::XML_ERROR_PARSING_ELEMENT;
+    int iOutInt;
+    string str_mode = string(pElement->GetText());
+    cout << "Current Active Mode: " << str_mode  << " Mode" << endl;
+
+    pElement = pRoot->FirstChildElement("Iteration");
+    int iteration = pElement->IntText(1);
+    cout << "Number of iteration: " << iteration << endl;
+
+    if (str_mode.compare("Velocity") == 0) {
+        mode = VEL_MODE;
+        cout << "--- Loading parameters for Velocity Mode ---" << endl;
+
+        tinyxml2::XMLElement * pParams = pRoot->FirstChildElement("Velocity_Mode_Parameters");
+        tinyxml2::XMLElement * pTarVelocity = pParams->FirstChildElement("Target_Velocity");
+        tinyxml2::XMLElement * pAcc = pParams->FirstChildElement("Acceleration");
+        tinyxml2::XMLElement * pDec = pParams->FirstChildElement("Deceleration");
+        tinyxml2::XMLElement * pDur = pParams->FirstChildElement("Duration");
+        double v = 0.0, acc = 0.0, dec = 0.0;
+        pTarVelocity->QueryDoubleText(&v);
+        pAcc->QueryDoubleText(&acc);
+        pDec->QueryDoubleText(&dec);
+        pDur->QueryIntText(&g_V_MODE_duration);
+        cout << "Target Velocity: " << v << " rpm" << endl;
+        cout << "Acceleration: " << acc << " rpm/s" << endl;
+        cout << "Deceleration: " << dec << " rpm/s" << endl;
+        g_V_MODE_velocity = static_cast<DWORD>(v);
+        g_V_MODE_acceleration = static_cast<DWORD>(acc);
+        g_V_MODE_deceleration = static_cast<DWORD>(dec);
+        g_V_MODE_duration *= 1000; // second to ms
+        cout << "g_V_MODE_duration: " << g_V_MODE_duration << endl;
+    }
+    else if (str_mode.compare("Position") == 0) {
+        mode = POS_MODE;
+        cout << "Loading parameters for Position Mode" << endl;
+
+        tinyxml2::XMLElement * pParams = pRoot->FirstChildElement("Position_Mode_Parameters");
+        tinyxml2::XMLElement * pTarPosition = pParams->FirstChildElement("Target_Position");
+        tinyxml2::XMLElement * pMaxVelocity = pParams->FirstChildElement("Max_Velocity");
+        tinyxml2::XMLElement * pAcc = pParams->FirstChildElement("Acceleration");
+        tinyxml2::XMLElement * pDec = pParams->FirstChildElement("Deceleration");
+        double p = 0.0, max_v = 0.0, acc = 0.0, dec = 0.0;
+        pTarPosition->QueryDoubleText(&p);
+        pMaxVelocity->QueryDoubleText(&max_v);
+        pAcc->QueryDoubleText(&acc);
+        pDec->QueryDoubleText(&dec);
+        cout << "Target Position: " << p << endl;
+        cout << "Max Velocity: " << max_v << " rpm" << endl;
+        cout << "Acceleration: " << acc << " rpm/s" << endl;
+        cout << "Deceleration: " << dec << " rpm/s" << endl;
+        g_P_MODE_position = static_cast<DWORD>(p);
+        g_P_MODE_max_velocity = static_cast<DWORD>(max_v);
+        g_P_MODE_acceleration = static_cast<DWORD>(acc);
+        g_P_MODE_deceleration = static_cast<DWORD>(dec);
+    }
+    else {
+        cout << "Error: Unknown mode" << endl;
+        return -1;
+    }
+
+
     int lResult = MMC_FAILED;
     DWORD ulErrorCode = 0;
 
@@ -69,10 +149,188 @@ int main(int argc, char** argv) {
         return lResult;
     }
 
-    if((lResult = Demo(&ulErrorCode))!=MMC_SUCCESS)
+//    if((lResult = Demo(&ulErrorCode))!=MMC_SUCCESS)
+//    {
+//        LogError("Demo", lResult, ulErrorCode);
+//        return lResult;
+//    }
+    DWORD lErrorCode = 0;
+
+    zeroPosition(g_pKeyHandle, g_usNodeId, lErrorCode);
+    cout << "<Begin> ";
+    PrintMotorPositon(g_pKeyHandle, g_usNodeId, lErrorCode);
+
+    if (mode == VEL_MODE) {
+        int acc_interval = static_cast<int>(((double)g_V_MODE_velocity / (double)g_V_MODE_acceleration) * 1000);
+        int dec_interval = static_cast<int>(((double)g_V_MODE_velocity / (double)g_V_MODE_deceleration) * 1000);
+        lResult = SetupProfileVelocityMode(g_pKeyHandle, g_usNodeId, lErrorCode);
+        if(lResult != MMC_SUCCESS) {
+            LogError("SetupProfileVelocityMode", lResult, lErrorCode);
+        }
+        else {
+            for (int i = 0; i < iteration; ++i) {
+                cout << "Iteration: #" << i+1 << "/" << iteration << endl;
+                long targetvelocity = g_V_MODE_velocity;
+
+                stringstream msg;
+                msg << "move with target velocity = " << targetvelocity << " rpm, node = " << g_usNodeId;
+                cout << msg.str() << endl;
+
+                if(VCS_MoveWithVelocity(g_pKeyHandle, g_usNodeId, targetvelocity, &lErrorCode) == 0)
+                {
+                    lResult = MMC_FAILED;
+                    LogError("VCS_MoveWithVelocity", lResult, lErrorCode);
+                }
+                Sleep(static_cast<DWORD>(g_V_MODE_duration + acc_interval));
+
+                if(VCS_MoveWithVelocity(g_pKeyHandle, g_usNodeId, 0, &lErrorCode) == 0)
+                {
+                    lResult = MMC_FAILED;
+                    LogError("VCS_MoveWithVelocity", lResult, lErrorCode);
+                }
+                Sleep(static_cast<DWORD>(dec_interval));
+
+                targetvelocity = -g_V_MODE_velocity;
+                msg.str("");
+                msg.clear();
+                msg << "move with target velocity = " << targetvelocity << " rpm, node = " << g_usNodeId;
+                cout << msg.str() << endl;
+
+                if(VCS_MoveWithVelocity(g_pKeyHandle, g_usNodeId, targetvelocity, &lErrorCode) == 0)
+                {
+                    lResult = MMC_FAILED;
+                    LogError("VCS_MoveWithVelocity", lResult, lErrorCode);
+                }
+                Sleep(static_cast<DWORD>(g_V_MODE_duration + acc_interval));
+
+                if(VCS_MoveWithVelocity(g_pKeyHandle, g_usNodeId, 0, &lErrorCode) == 0)
+                {
+                    lResult = MMC_FAILED;
+                    LogError("VCS_MoveWithVelocity", lResult, lErrorCode);
+                }
+                Sleep(static_cast<DWORD>(dec_interval));
+            }
+        }
+        if(lResult == MMC_SUCCESS)
+        {
+            cout << "halt velocity movement" << endl;
+
+            if(VCS_HaltVelocityMovement(g_pKeyHandle, g_usNodeId, &lErrorCode) == 0)
+            {
+                lResult = MMC_FAILED;
+                LogError("VCS_HaltVelocityMovement", lResult, lErrorCode);
+            }
+        }
+
+//        cout << "<Before Home> ";
+//        PrintMotorPositon(g_pKeyHandle, g_usNodeId, lErrorCode);
+//        //Start homing
+//        if(lResult == MMC_SUCCESS)
+//        {
+//            VCS_ActivatePositionMode(g_pKeyHandle, g_usNodeId, &lErrorCode);
+//            VCS_SetHomingParameter(g_pKeyHandle, g_usNodeId, 1000, 100, 10, (long)0, 100, 0, &lErrorCode);
+//            if(VCS_FindHome(g_pKeyHandle, g_usNodeId, HM_ACTUAL_POSITION, &lErrorCode) == 0)
+//            {
+//                lResult = MMC_FAILED;
+//                LogError("VCS_WaitForHomingAttained", lResult, lErrorCode);
+//            }
+//        }
+//        if(VCS_WaitForHomingAttained(g_pKeyHandle, g_usNodeId, 5000, &lErrorCode) == 0)
+//        {
+//            lResult = MMC_FAILED;
+//            LogError("VCS_WaitForHomingAttained", lResult, lErrorCode);
+//        }
+//        cout << "<After Home> ";
+//        PrintMotorPositon(g_pKeyHandle, g_usNodeId, lErrorCode);
+    }
+    else if (mode == POS_MODE) {
+        int acc_interval = static_cast<int>(((double)g_P_MODE_max_velocity / (double)g_P_MODE_acceleration) * 1000);
+        int dec_interval = static_cast<int>(((double)g_P_MODE_max_velocity / (double)g_P_MODE_deceleration) * 1000);
+        int loop_time = static_cast<int>((double)g_P_MODE_position / (double)g_P_MODE_max_velocity);
+        lResult = SetupProfilePositionMode(g_pKeyHandle, g_usNodeId, lErrorCode);
+        if(lResult != MMC_SUCCESS) {
+            LogError("SetupProfileVelocityMode", lResult, lErrorCode);
+        }
+        else {
+            for (int i = 0; i < iteration; ++i) {
+                cout << "Iteration: #" << i + 1 << "/" << iteration << endl;
+                long targetPosition = g_P_MODE_position;
+                stringstream msg;
+                msg << "move to position = " << targetPosition << ", node = " << g_usNodeId;
+                cout << msg.str() << endl;
+
+                if (VCS_MoveToPosition(g_pKeyHandle, g_usNodeId, targetPosition, true, 1, &lErrorCode) == 0) {
+                    LogError("VCS_MoveToPosition", lResult, lErrorCode);
+                    lResult = MMC_FAILED;
+                }
+                Sleep(static_cast<DWORD>(loop_time + acc_interval + dec_interval));
+
+                if (VCS_MoveToPosition(g_pKeyHandle, g_usNodeId, 0, true, 1, &lErrorCode) == 0) {
+                    LogError("VCS_MoveToPosition", lResult, lErrorCode);
+                    lResult = MMC_FAILED;
+                }
+                Sleep(static_cast<DWORD>(loop_time + acc_interval + dec_interval));
+
+                targetPosition = -g_P_MODE_position;
+                msg.str("");
+                msg.clear();
+                msg << "move to position = " << targetPosition << ", node = " << g_usNodeId;
+                cout << msg.str() << endl;
+
+                if (VCS_MoveToPosition(g_pKeyHandle, g_usNodeId, targetPosition, true, 1, &lErrorCode) == 0) {
+                    LogError("VCS_MoveToPosition", lResult, lErrorCode);
+                    lResult = MMC_FAILED;
+                }
+                Sleep(static_cast<DWORD>(loop_time + acc_interval + dec_interval));
+
+                if (VCS_MoveToPosition(g_pKeyHandle, g_usNodeId, 0, true, 1, &lErrorCode) == 0) {
+                    LogError("VCS_MoveToPosition", lResult, lErrorCode);
+                    lResult = MMC_FAILED;
+                }
+                Sleep(static_cast<DWORD>(loop_time + acc_interval + dec_interval));
+                cout << "<Run> ";
+                PrintMotorPositon(g_pKeyHandle, g_usNodeId, lErrorCode);
+            }
+            if(lResult == MMC_SUCCESS)
+            {
+                cout << "halt position movement" << endl;
+
+                if(VCS_HaltPositionMovement(g_pKeyHandle, g_usNodeId, &lErrorCode) == 0)
+                {
+                    LogError("VCS_HaltPositionMovement", lResult, lErrorCode);
+                    lResult = MMC_FAILED;
+                }
+            }
+        }
+    }
+//    lResult = DemoProfileVelocityMode(g_pKeyHandle, g_usNodeId, lErrorCode);
+//
+//    if(lResult != MMC_SUCCESS)
+//    {
+//        LogError("DemoProfileVelocityMode", lResult, lErrorCode);
+//    }
+//    else
+//    {
+//        lResult = DemoProfilePositionMode(g_pKeyHandle, g_usNodeId, lErrorCode);
+//
+//        if(lResult != MMC_SUCCESS)
+//        {
+//            LogError("DemoProfilePositionMode", lResult, lErrorCode);
+//        }
+//        else
+//        {
+//            if(VCS_SetDisableState(g_pKeyHandle, g_usNodeId, &lErrorCode) == 0)
+//            {
+//                LogError("VCS_SetDisableState", lResult, lErrorCode);
+//                lResult = MMC_FAILED;
+//            }
+//        }
+//    }
+
+    if(VCS_SetDisableState(g_pKeyHandle, g_usNodeId, &lErrorCode) == 0)
     {
-        LogError("Demo", lResult, ulErrorCode);
-        return lResult;
+        LogError("VCS_SetDisableState", lResult, lErrorCode);
+        lResult = MMC_FAILED;
     }
 
     if((lResult = CloseDevice(&ulErrorCode))!=MMC_SUCCESS)
@@ -211,7 +469,7 @@ int PrepareDemo(DWORD * p_pErrorCode)
     return lResult;
 }
 
-int DemoProfileVelocityMode(HANDLE p_DeviceHandle, WORD p_usNodeId, DWORD & p_rlErrorCode)
+int SetupProfileVelocityMode(HANDLE p_DeviceHandle, WORD p_usNodeId, DWORD & p_rlErrorCode)
 {
     int lResult = MMC_SUCCESS;
     stringstream msg;
@@ -220,64 +478,36 @@ int DemoProfileVelocityMode(HANDLE p_DeviceHandle, WORD p_usNodeId, DWORD & p_rl
 
     cout << msg.str() << endl;
 
-
-    if(VCS_ActivateProfileVelocityMode(p_DeviceHandle, p_usNodeId, &p_rlErrorCode) == 0)
-    {
-        LogError("VCS_ActivateProfileVelocityMode", lResult, p_rlErrorCode);
+    if(VCS_ActivateProfileVelocityMode(p_DeviceHandle, p_usNodeId, &p_rlErrorCode) == 0) {
         lResult = MMC_FAILED;
+        LogError("VCS_ActivateProfileVelocityMode", lResult, p_rlErrorCode);
+    } else {
+        if(VCS_SetVelocityProfile(p_DeviceHandle, p_usNodeId, g_V_MODE_acceleration, g_V_MODE_deceleration, &p_rlErrorCode) == 0)
+        {
+            lResult = MMC_FAILED;
+            LogError("VCS_SetVelocityProfile", lResult, p_rlErrorCode);
+        }
     }
-    else
-    {
-        // Check velocity profile parameters
-        DWORD  l_acceleration = 10000, l_deceleration = 10000;
 
-        if(VCS_SetVelocityProfile(p_DeviceHandle, p_usNodeId, l_acceleration, l_deceleration, &p_rlErrorCode) == 0)
+    return lResult;
+}
+
+int SetupProfilePositionMode(HANDLE p_DeviceHandle, WORD p_usNodeId, DWORD & p_rlErrorCode)
+{
+    int lResult = MMC_SUCCESS;
+
+    stringstream msg;
+    msg << "set profile position mode, node = " << p_usNodeId;
+    cout << msg.str() << endl;
+
+    if(VCS_ActivateProfilePositionMode(p_DeviceHandle, p_usNodeId, &p_rlErrorCode) == 0) {
+        lResult = MMC_FAILED;
+        LogError("VCS_ActivateProfileVelocityMode", lResult, p_rlErrorCode);
+    } else {
+        if(VCS_SetPositionProfile(p_DeviceHandle, p_usNodeId, g_P_MODE_max_velocity, g_P_MODE_acceleration, g_P_MODE_deceleration, &p_rlErrorCode) == 0)
         {
-            LogError("VCS_ActivateProfileVelocityMode", lResult, p_rlErrorCode);
             lResult = MMC_FAILED;
-        }
-
-        if(VCS_GetVelocityProfile(p_DeviceHandle, p_usNodeId, &l_acceleration, &l_deceleration, &p_rlErrorCode) == 0)
-        {
-            lResult = MMC_FAILED;
-            LogError("VCS_GetVelocityProfile", lResult, p_rlErrorCode);
-        } else{
-            cout << "current acceleration: " << l_acceleration << ", deceleration: " << l_deceleration << endl;
-        }
-
-        list<long> velocityList;
-
-        velocityList.push_back(-5000);
-        velocityList.push_back(10000);
-//        velocityList.push_back(20000);
-
-        for(list<long>::iterator it = velocityList.begin(); it !=velocityList.end(); it++)
-        {
-            long targetvelocity = (*it);
-
-            stringstream msg;
-            msg << "move with target velocity = " << targetvelocity << " rpm, node = " << p_usNodeId;
-            cout << msg.str() << endl;
-
-            if(VCS_MoveWithVelocity(p_DeviceHandle, p_usNodeId, targetvelocity, &p_rlErrorCode) == 0)
-            {
-                lResult = MMC_FAILED;
-                LogError("VCS_MoveWithVelocity", lResult, p_rlErrorCode);
-                break;
-            }
-
-            Sleep(5000);
-        }
-
-        if(lResult == MMC_SUCCESS)
-        {
-            cout << "halt velocity movement" << endl;
-
-            if(VCS_HaltVelocityMovement(p_DeviceHandle, p_usNodeId, &p_rlErrorCode) == 0)
-            {
-                lResult = MMC_FAILED;
-                LogError("VCS_HaltVelocityMovement", lResult, p_rlErrorCode);
-            }
+            LogError("VCS_SetPositionProfile", lResult, p_rlErrorCode);
         }
     }
 
@@ -294,8 +524,8 @@ int DemoProfilePositionMode(HANDLE p_DeviceHandle, WORD p_usNodeId, DWORD & p_rl
 
     if(VCS_ActivateProfilePositionMode(p_DeviceHandle, p_usNodeId, &p_rlErrorCode) == 0)
     {
-        LogError("VCS_ActivateProfilePositionMode", lResult, p_rlErrorCode);
         lResult = MMC_FAILED;
+        LogError("VCS_ActivateProfilePositionMode", lResult, p_rlErrorCode);
     }
     else
     {
@@ -314,8 +544,8 @@ int DemoProfilePositionMode(HANDLE p_DeviceHandle, WORD p_usNodeId, DWORD & p_rl
 
             if(VCS_MoveToPosition(p_DeviceHandle, p_usNodeId, targetPosition, 0, 1, &p_rlErrorCode) == 0)
             {
-                LogError("VCS_MoveToPosition", lResult, p_rlErrorCode);
                 lResult = MMC_FAILED;
+                LogError("VCS_MoveToPosition", lResult, p_rlErrorCode);
                 break;
             }
 
@@ -328,8 +558,8 @@ int DemoProfilePositionMode(HANDLE p_DeviceHandle, WORD p_usNodeId, DWORD & p_rl
 
             if(VCS_HaltPositionMovement(p_DeviceHandle, p_usNodeId, &p_rlErrorCode) == 0)
             {
-                LogError("VCS_HaltPositionMovement", lResult, p_rlErrorCode);
                 lResult = MMC_FAILED;
+                LogError("VCS_HaltPositionMovement", lResult, p_rlErrorCode);
             }
         }
     }
@@ -337,36 +567,23 @@ int DemoProfilePositionMode(HANDLE p_DeviceHandle, WORD p_usNodeId, DWORD & p_rl
     return lResult;
 }
 
-int Demo(DWORD * p_pErrorCode)
-{
+void PrintMotorPositon(HANDLE p_DeviceHandle, WORD p_usNodeId, DWORD & p_rlErrorCode) {
+    long pos;
+    VCS_GetPositionIs(p_DeviceHandle, p_usNodeId, &pos, &p_rlErrorCode);
+    cout << "Motor node #" <<  p_usNodeId << " position: " << pos << endl;
+}
+
+// Set current position as zero (homing) position
+int zeroPosition(HANDLE p_DeviceHandle, WORD p_usNodeId, DWORD & p_rlErrorCode) {
     int lResult = MMC_SUCCESS;
     DWORD lErrorCode = 0;
 
-    lResult = DemoProfileVelocityMode(g_pKeyHandle, g_usNodeId, lErrorCode);
-
-    if(lResult != MMC_SUCCESS)
+    if(VCS_DefinePosition(p_DeviceHandle, p_usNodeId, 0, &p_rlErrorCode) == 0)
     {
-        LogError("DemoProfileVelocityMode", lResult, lErrorCode);
+        LogError("VCS_DefinePosition", lResult, lErrorCode);
+        lResult = MMC_FAILED;
     }
-    else
-    {
-        lResult = DemoProfilePositionMode(g_pKeyHandle, g_usNodeId, lErrorCode);
-
-        if(lResult != MMC_SUCCESS)
-        {
-            LogError("DemoProfilePositionMode", lResult, lErrorCode);
-        }
-        else
-        {
-            if(VCS_SetDisableState(g_pKeyHandle, g_usNodeId, &lErrorCode) == 0)
-            {
-                LogError("VCS_SetDisableState", lResult, lErrorCode);
-                lResult = MMC_FAILED;
-            }
-        }
-    }
-
-    return lResult;
+    return  lResult;
 }
 
 
