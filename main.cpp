@@ -244,9 +244,9 @@ int main(int argc, char** argv) {
 //        PrintMotorPositon(g_pKeyHandle, g_usNodeId, lErrorCode);
     }
     else if (mode == POS_MODE) {
-        int acc_interval = static_cast<int>(((double)g_P_MODE_max_velocity / (double)g_P_MODE_acceleration) * 1000);
-        int dec_interval = static_cast<int>(((double)g_P_MODE_max_velocity / (double)g_P_MODE_deceleration) * 1000);
-        int loop_time = static_cast<int>((double)g_P_MODE_position / (double)g_P_MODE_max_velocity);
+        double acc_interval = ((double)g_P_MODE_max_velocity / (double)g_P_MODE_acceleration) * 1000.0;
+        double dec_interval = ((double)g_P_MODE_max_velocity / (double)g_P_MODE_deceleration) * 1000.0;
+        int oneside_time = 1.1* static_cast<int>(((double)g_P_MODE_position / (double)g_P_MODE_max_velocity) + 0.5 * (acc_interval + dec_interval));
         lResult = SetupProfilePositionMode(g_pKeyHandle, g_usNodeId, lErrorCode);
         if(lResult != MMC_SUCCESS) {
             LogError("SetupProfileVelocityMode", lResult, lErrorCode);
@@ -254,7 +254,7 @@ int main(int argc, char** argv) {
         else {
             for (int i = 0; i < iteration; ++i) {
                 cout << "Iteration: #" << i + 1 << "/" << iteration << endl;
-                long targetPosition = g_P_MODE_position;
+                long targetPosition = static_cast<long>(g_P_MODE_position);
                 stringstream msg;
                 msg << "move to position = " << targetPosition << ", node = " << g_usNodeId;
                 cout << msg.str() << endl;
@@ -263,15 +263,12 @@ int main(int argc, char** argv) {
                     LogError("VCS_MoveToPosition", lResult, lErrorCode);
                     lResult = MMC_FAILED;
                 }
-                Sleep(static_cast<DWORD>(loop_time + acc_interval + dec_interval));
+                if (i == 0)
+                    Sleep(static_cast<DWORD>(oneside_time));
+                else
+                    Sleep(static_cast<DWORD>(2*oneside_time));
 
-                if (VCS_MoveToPosition(g_pKeyHandle, g_usNodeId, 0, true, 1, &lErrorCode) == 0) {
-                    LogError("VCS_MoveToPosition", lResult, lErrorCode);
-                    lResult = MMC_FAILED;
-                }
-                Sleep(static_cast<DWORD>(loop_time + acc_interval + dec_interval));
-
-                targetPosition = -g_P_MODE_position;
+                targetPosition = -static_cast<long>(g_P_MODE_position);
                 msg.str("");
                 msg.clear();
                 msg << "move to position = " << targetPosition << ", node = " << g_usNodeId;
@@ -281,16 +278,14 @@ int main(int argc, char** argv) {
                     LogError("VCS_MoveToPosition", lResult, lErrorCode);
                     lResult = MMC_FAILED;
                 }
-                Sleep(static_cast<DWORD>(loop_time + acc_interval + dec_interval));
-
-                if (VCS_MoveToPosition(g_pKeyHandle, g_usNodeId, 0, true, 1, &lErrorCode) == 0) {
-                    LogError("VCS_MoveToPosition", lResult, lErrorCode);
-                    lResult = MMC_FAILED;
-                }
-                Sleep(static_cast<DWORD>(loop_time + acc_interval + dec_interval));
-                cout << "<Run> ";
-                PrintMotorPositon(g_pKeyHandle, g_usNodeId, lErrorCode);
+                Sleep(static_cast<DWORD>(2*oneside_time));
             }
+            if (VCS_MoveToPosition(g_pKeyHandle, g_usNodeId, 0, true, 1, &lErrorCode) == 0) {
+                LogError("VCS_MoveToPosition", lResult, lErrorCode);
+                lResult = MMC_FAILED;
+            }
+            Sleep(static_cast<DWORD>(oneside_time));
+
             if(lResult == MMC_SUCCESS)
             {
                 cout << "halt position movement" << endl;
